@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import {
-  Activity,
   ClipboardCheck,
   FileText,
   ShieldCheck,
@@ -8,7 +7,6 @@ import {
 } from 'lucide-react'
 import GeneratorEngine from './components/GeneratorEngine'
 import EvaluatorEngine from './components/EvaluatorEngine'
-import ReportFairV from './components/ReportFairV'
 
 function App() {
   const tabs = useMemo(
@@ -27,25 +25,12 @@ function App() {
         description:
           'Confronto statistico tra bracci, calcolo DES e indicatori di efficienza.',
       },
-      {
-        id: 'fairv-report',
-        label: 'Report FAIR-V',
-        icon: Activity,
-        description:
-          'Dashboard di compliance FAIR-V con export report e metriche aggregate.',
-      },
     ],
     [],
   )
 
   const [activeTabId, setActiveTabId] = useState(tabs[0].id)
-  const [evaluatorResults, setEvaluatorResults] = useState({
-    ready: false,
-    groundTruthRowsCount: 0,
-    arms: {},
-  })
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
-  const ActiveIcon = activeTab.icon
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -117,50 +102,8 @@ function App() {
 
           {activeTabId === 'multimodal-generator' ? (
             <GeneratorEngine />
-          ) : activeTabId === 'evaluation-engine' ? (
-            <EvaluatorEngine onResultsChange={setEvaluatorResults} />
-          ) : activeTabId === 'fairv-report' ? (
-            <ReportFairV evaluatorResults={evaluatorResults} />
           ) : (
-            <section className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
-              <div className="mb-6 flex items-center gap-3">
-                <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
-                  <ActiveIcon className="h-5 w-5" />
-                </div>
-                <h3 className="text-lg font-semibold text-slate-900">
-                  Placeholder modulo
-                </h3>
-              </div>
-
-              <div className="grid gap-6 md:grid-cols-3">
-                <article className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">
-                    Stato
-                  </p>
-                  <p className="mt-2 font-medium text-slate-900">
-                    Inizializzazione completata
-                  </p>
-                </article>
-
-                <article className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">
-                    Modulo attivo
-                  </p>
-                  <p className="mt-2 font-medium text-slate-900">
-                    {activeTab.label}
-                  </p>
-                </article>
-
-                <article className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">
-                    Prossimo step
-                  </p>
-                  <p className="mt-2 font-medium text-slate-900">
-                    Implementazione logica applicativa
-                  </p>
-                </article>
-              </div>
-            </section>
+            <EvaluatorEngine />
           )}
         </main>
       </div>

@@ -225,24 +225,7 @@ export default function ReportFairV({ evaluatorResults }) {
       </div>
 
       <div ref={containerRef} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="grid gap-4 md:grid-cols-3">
-          {ARM_KEYS.map((key) => {
-            const item = evaluatorResults?.arms?.[key] ?? {}
-            return (
-              <article key={key} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-800">{item.label ?? `Braccio ${key}`}</p>
-                <p className="mt-2 text-sm text-slate-700">DES medio: {(item.meanDes ?? 0).toFixed(2)}</p>
-                <p className="mt-1 text-sm text-slate-700">Ttotal: {(item.ttotal ?? 0).toFixed(2)} min</p>
-                <p className="mt-1 text-sm text-slate-700">ABR: {(item.abr ?? 0).toFixed(3)}</p>
-                <p className="mt-1 text-sm text-slate-700">EE: {(item.ee ?? 0).toFixed(4)}</p>
-                <p className="mt-1 text-sm text-slate-700">ONR: {(item.onr ?? 0).toFixed(2)}%</p>
-                <p className="mt-1 text-sm text-slate-700">DLC: {(item.dlc ?? 0).toFixed(2)}%</p>
-              </article>
-            )
-          })}
-        </div>
-
-        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
           <p className="text-sm font-semibold text-slate-900">Test di Friedman (approssimato)</p>
           <p className="mt-2 text-sm text-slate-700">Pazienti comuni valutati: {friedman.n}</p>
           <p className="mt-1 text-sm text-slate-700">Statistica Q: {friedman.q.toFixed(4)}</p>
