@@ -1,153 +1,169 @@
 # Garante Web App
 
-Applicazione React (Vite) per il **Generator Engine** e il **Motore di valutazione** del protocollo Garante.
+Applicazione web per supportare la **generazione** e la **valutazione** di materiali nel contesto del protocollo Garante (dataset multimodale, referti sintetici, confronto tra bracci e indicatori FAIR-V). Questo documento descrive come **configurare un ambiente indipendente** e **ripetere le procedure** su una propria infrastruttura.
 
-## OpenRouter: chiave API
+---
 
-- **Produzione (Firebase Hosting):** la chiave **non** va nel frontend. È memorizzata come **Secret** `OPENROUTER_API_KEY` sulle Cloud Functions; il browser chiama solo `POST /api/openrouter` (stesso dominio).
-- **Sviluppo locale:** opzionale `VITE_OPENROUTER_API_KEY` in `.env.local` per chiamate dirette a OpenRouter, **oppure** nessuna chiave nel client + **emulator** Firebase (vedi sotto).
+## 1. Cosa contiene il repository
 
-Vedi [`.env.example`](.env.example) per i nomi delle variabili (senza valori segreti).
+| Modulo | Funzione |
+|--------|----------|
+| **Generatore multimodale** | Orchestrazione della generazione procedurale (testo / allegati) tramite modelli accessibili via [OpenRouter](https://openrouter.ai/). |
+| **Motore di valutazione** | Caricamento output sperimentali, confronto statistico tra bracci, calcolo DES e metriche di efficienza. |
+| **Report FAIR-V** | Esportazione e visualizzazione strutturata dei risultati. |
 
-## Prerequisiti
+Il frontend è **React 18** (Vite 5) con **Tailwind CSS**. Le chiamate ai modelli in produzione passano da una **Cloud Function** che funge da proxy (chiave OpenRouter solo lato server). L’accesso all’app richiede **Firebase Authentication** (e-mail/password e/o Google).
 
-- Node 20+
-- Account Firebase e [Firebase CLI](https://firebase.google.com/docs/cli): `npm i -g firebase-tools`
-- Piano **Blaze** (pay-as-you-go) spesso richiesto per Cloud Functions che chiamano API esterne (OpenRouter). Imposta **budget alert** nella console Google Cloud.
+---
 
-## Configurazione Firebase
+## 2. Architettura di riferimento
 
-1. Copia [`.firebaserc`](.firebaserc) e imposta il **project ID** reale, oppure nella root del repo:
-   ```bash
-   firebase login
-   firebase use --add
-   ```
-2. Crea **`.env.local`** con le variabili `VITE_FIREBASE_*` da Firebase Console → **Impostazioni progetto** → **Le tue app** (oggetto `firebaseConfig`). Servono per **Authentication** (login e-mail/Google) e per il proxy OpenRouter.
+```
+Browser (Hosting Firebase)
+  → login Firebase Auth (ID token)
+  → POST /api/openrouter + Authorization: Bearer <token>
+       → Cloud Function `openrouter` (verifica token, Secret OPENROUTER_API_KEY)
+       → API OpenRouter
+```
 
-### Autenticazione (e-mail + Google)
+In sviluppo è possibile usare l’**emulator** delle Functions e/o chiamate **dirette** a OpenRouter con chiave solo in `.env.local` (non committata).
 
-- In **Firebase Console → Authentication** abilita **E-mail/Password** e **Google** (come hai già fatto).
-- In **Authentication → Settings → Authorized domains** assicurati che ci siano `localhost` (sviluppo) e il dominio Hosting (`<project>.web.app`, `<project>.firebaseapp.com`).
-- L’app mostra la schermata di **login** finché l’utente non è autenticato; in sidebar c’è **Esci**.
-- La Cloud Function `openrouter` accetta solo richieste con **`Authorization: Bearer <ID token Firebase>`** (token dell’utente loggato). Senza login non è possibile usare il proxy in produzione.
+File rilevanti: [`firebase.json`](firebase.json), [`functions/index.js`](functions/index.js), [`vite.config.js`](vite.config.js).
 
-### Deploy CI (GitHub Actions)
+---
 
-Per il build su GitHub, imposta le **stesse** chiavi `VITE_FIREBASE_*` come **Repository variables** (vanno bene come Variables: finiscono comunque nel bundle JS pubblico).  
-**Settings → Secrets and variables → Actions → tab Variables** e aggiungi: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`.  
-Il workflow [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) le passa già a `npm run build`.
+## 3. Prerequisiti
 
-## Secret OpenRouter (solo server)
+- **Node.js** 20+
+- Account **Firebase** (progetto dedicato alla propria replica) e [Firebase CLI](https://firebase.google.com/docs/cli) (`npm i -g firebase-tools`)
+- Account **OpenRouter** e chiave API per i modelli scelti
+- Piano **Blaze** (Google Cloud) se si usano Cloud Functions che effettuano richieste HTTP esterne; si consiglia di impostare **alert di budget** nella console Google Cloud
+
+---
+
+## 4. Installazione locale
 
 ```bash
-cd functions
+git clone <URL-del-repository>
+cd garante-webapp
 npm install
-cd ..
+cd functions && npm install && cd ..
+```
+
+Copiare [`.env.example`](.env.example) in **`.env.local`** nella root e compilare le variabili (vedi §5). Il file `.env.local` non va incluso in pubblicazioni né committato.
+
+Impostare il proprio proget Firebase in [`.firebaserc`](.firebaserc) oppure:
+
+```bash
+firebase login
+firebase use --add
+```
+
+---
+
+## 5. Variabili d’ambiente (frontend)
+
+Tutti i nomi con prefisso `VITE_` sono incorporati nel bundle al **momento del build**; non sono adatti a segreti ad alta sensibilità (la “Web API key” di Firebase è pubblica per design, con restrizioni lato Google Cloud / domini autorizzati).
+
+| Variabile | Ruolo |
+|-----------|--------|
+| `VITE_FIREBASE_API_KEY` | Config SDK Firebase (Console → Impostazioni progetto → App Web) |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Dominio Auth |
+| `VITE_FIREBASE_PROJECT_ID` | ID progetto (coerente con `.firebaserc`; usato dal proxy Vite verso l’emulator) |
+| `VITE_FIREBASE_STORAGE_BUCKET` | Bucket Storage indicato in console |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Sender ID |
+| `VITE_FIREBASE_APP_ID` | App ID |
+| `VITE_OPENROUTER_API_KEY` | *(Opzionale)* Solo sviluppo: chiamata diretta al provider, senza proxy |
+| `VITE_USE_OPENROUTER_PROXY` | `true` forza l’uso del proxy anche se è presente la chiave locale |
+
+---
+
+## 6. Firebase: Authentication e Hosting
+
+1. Nella **Firebase Console**, abilitare i metodi desiderati (es. **E-mail/Password**, **Google**).
+2. In **Authentication → Settings → Authorized domains** includere `localhost` (sviluppo) e i domini Hosting (`<project-id>.web.app`, `<project-id>.firebaseapp.com`).
+3. Opzionale ma consigliato: in **Google Cloud Console → API e servizi → Credenziali**, applicare **restrizioni** alla chiave API browser (referrer HTTP, API consentite) coerenti con i domini di deploy.
+
+Senza autenticazione valida, la function `openrouter` risponde **401** (token Firebase obbligatorio).
+
+---
+
+## 7. Segreto OpenRouter (solo server)
+
+```bash
 firebase functions:secrets:set OPENROUTER_API_KEY
 ```
 
-Incolla la chiave quando richiesto. Non committare mai la chiave.
+Incollare la chiave quando richiesto. Non versionare mai chiavi in repository o in issue pubbliche.
 
-## Sviluppo locale (frontend)
+---
+
+## 8. Esecuzione in sviluppo
+
+**Solo frontend** (senza proxy Functions):
 
 ```bash
-npm install
 npm run dev
 ```
 
-- Con **`.env.local`** contenente `VITE_OPENROUTER_API_KEY`: chiamata diretta a OpenRouter (comportamento classico).
-- **Senza** chiave nel client: avvia l’emulator e usa il proxy verso la function `openrouter`:
+Se in `.env.local` è assente `VITE_OPENROUTER_API_KEY`, avviare l’emulator e usare il proxy (stesso `VITE_FIREBASE_PROJECT_ID` di `.firebaserc`):
 
 ```bash
-# terminale 1 — dalla root del repo
+# Terminale 1
 firebase emulators:start --only functions
-```
 
-```bash
-# terminale 2
+# Terminale 2
 npm run dev
 ```
 
-Assicurati che `VITE_FIREBASE_PROJECT_ID` in `.env.local` corrisponda al project in `.firebaserc`.
+Emulator completo (hosting + functions): `firebase emulators:start` (porte in [`firebase.json`](firebase.json)).
 
-## Build e deploy (manuale dal PC)
+---
+
+## 9. Build e deploy manuale
 
 ```bash
 npm run build
 firebase deploy --only "hosting,functions"
 ```
 
-Su **PowerShell** usa le virgolette attorno a `hosting,functions`. Oppure:
+Su **Windows PowerShell** mantenere le virgolette attorno a `hosting,functions`. Dopo il deploy, l’app risponde su `https://<project-id>.web.app`; il rewrite `/api/openrouter` è definito in `firebase.json`.
 
-```bash
-firebase deploy
-```
+---
 
-Dopo il deploy, l’app su `https://<project>.web.app` userà `POST /api/openrouter` con rewrite definito in [`firebase.json`](firebase.json).
+## 10. Deploy continuo con GitHub Actions (opzionale)
 
-## Deploy automatico da GitHub (CI)
+Il workflow [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) esegue build e `firebase deploy` al push su `main`.
 
-Flusso: lavori in Cursor → `git push` sul branch **`main`** → GitHub Actions esegue build e `firebase deploy`.
+### 10.1 Autenticazione del workflow (account di servizio)
 
-L’autenticazione usa un **account di servizio Google** (JSON), come raccomandato da `firebase-tools` al posto di `FIREBASE_TOKEN` (deprecato).
+1. **Google Cloud Console** (progetto collegato a Firebase) → **IAM** → **Account di servizio** → creare un account dedicato al CI.
+2. Assegnare al progetto un ruolo sufficiente per Hosting, Cloud Functions (Gen 2), Cloud Build e Artifact Registry (in ambienti controllati si possono usare ruoli più granulari del generico **Editor**).
+3. Creare una **chiave JSON** (una tantum), scaricarla in modo sicuro.
+4. Nel repository GitHub: **Settings → Secrets and variables → Actions → New repository secret**
+   - Nome: `FIREBASE_SERVICE_ACCOUNT_JSON`
+   - Valore: **intero contenuto** del file JSON (da `{` a `}`), senza committare il file nel repo.
 
-### 1. Crea l’account di servizio (Google Cloud Console)
+Riferimento ufficiale: [Autenticazione Google Cloud](https://cloud.google.com/docs/authentication/getting-started).
 
-1. Apri [Google Cloud Console](https://console.cloud.google.com/) e seleziona il progetto **stesso** del tuo Firebase (es. `garante-webapp`).
-2. **IAM e amministrazione** → **Account di servizio** → **Crea account di servizio**.
-3. Nome es. `github-actions-firebase-deploy` → **Crea e continua**.
-4. **Concedi a questo account di servizio l’accesso al progetto**: aggiungi il ruolo **Editor** (`Editor`) sul progetto.  
-   (In ambienti più restrittivi si possono usare ruoli più granulari; per un repo personale è il modo più semplice per far funzionare Hosting + Functions Gen2 + Build.)
-5. **Fine** → apri l’account creato → scheda **Chiavi** → **Aggiungi chiave** → **Crea nuova chiave** → formato **JSON** → scarica il file **una sola volta**.
+### 10.2 Variabili per il build Vite su GitHub
 
-### 2. Cosa mettere in `FIREBASE_SERVICE_ACCOUNT_JSON` (spiegazione dettagliata)
+Le stesse chiavi del §5 devono essere definite come **Repository variables** (scheda **Variables**, non come corpo di un unico secret): **Name** = nome variabile, **Value** = **solo il valore** come dopo `=` in `.env.local` — **non** anteporre `VITE_FIREBASE_API_KEY=` nel campo valore (causerebbe errore `auth/api-key-not-valid` in produzione).
 
-**Non è un testo che inventi tu.** È **l’intero contenuto del file `.json`** che Google scarica quando crei la chiave (passo 1, punto 5).
+Nomi attesi: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`.
 
-1. Sul PC trovi un file con nome tipo `garante-webapp-xxxxx.json` (il nome può variare).
-2. Aprilo con **Blocco note** / VS Code / qualsiasi editor di testo.
-3. Seleziona **tutto** (`Ctrl+A`), **copia** (`Ctrl+C`).
-4. Su GitHub: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
-   - **Name:** esattamente `FIREBASE_SERVICE_ACCOUNT_JSON` (maiuscole/minuscole come scritto).
-   - **Secret:** incolla **tutto** quello che hai copiato. Deve iniziare con `{` e finire con `}`.
+---
 
-**Come capisci che è il file giusto:** dentro ci sono campi come `"type": "service_account"`, `"project_id": "garante-webapp"` (o il tuo ID progetto), `"private_key": "-----BEGIN PRIVATE KEY-----\n...`, `"client_email": "qualcosa@....iam.gserviceaccount.com"`.  
-Se vedi queste cose, è il JSON corretto.
+## 11. Riproduttibilità e dati
 
-**Cosa non va messo nel secret:**
+- Non pubblicare file `.env`, `.env.local`, chiavi API né export di dati identificabili senza autorizzazione etica/legale del contesto di studio.
+- Documentare nel proprio articolo o allegato: **versione del commit**, **modelli OpenRouter** e parametri usati, **seed** o checkpoint se applicabili (il codice può evolvere: il commit fissa lo stato del software).
+- Dopo studi condivisi, valutare **rotazione** delle chiavi esposte in ambienti non più controllati.
 
-- Il vecchio **token** da `firebase login:ci` (stringa corta, non è un JSON).
-- Solo il **project ID** o solo l’email dell’account di servizio.
-- Un JSON **tagliato** a metà o modificato a mano.
-- **Mai** committare questo file nel repository: solo nel secret GitHub.
+---
 
-- **(Opzionale)** Se avevi ancora il secret `FIREBASE_TOKEN`, puoi eliminarlo: il workflow non lo usa più.
+## 12. Stack tecnico
 
-### 3. Push su `main`
+React 18.3, Vite 5, Tailwind 4, Firebase (Auth, Hosting, Functions v2), OpenRouter (proxy server-side), jsPDF, html2canvas, Papa Parse, SheetJS (xlsx), Lucide React.
 
-Il file [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) esegue `google-github-actions/auth` e poi `firebase deploy`. Ogni push su **`main`** avvia il deploy; puoi anche usare **Actions** → **Deploy Firebase** → **Run workflow**.
-
-### Errori CI comuni
-
-- **`Failed to list functions` / errori IAM**: l’account di servizio non ha ruoli sufficienti sul progetto; verifica il ruolo **Editor** (o equivalenti per Cloud Functions / Cloud Build).
-- **Secret mancante o nome sbagliato**: il nome deve essere esattamente `FIREBASE_SERVICE_ACCOUNT_JSON`.
-- **JSON troncato o modificato**: incolla l’intero JSON valido, senza virgolette extra attorno.
-
-Il warning su **Node.js 20** nelle Actions è informativo; separato dai problemi di deploy.
-
-## Emulator completo (opzionale)
-
-```bash
-firebase emulators:start
-```
-
-Include hosting (porta 5000) e functions (5001) secondo [`firebase.json`](firebase.json).
-
-## Pubblicazione codice (rivista / repository)
-
-- Non includere `.env`, `.env.local`, né secret.
-- Ruotare/revocare la chiave OpenRouter usata in fase studio dopo la pubblicazione, se era esposta in ambienti non più controllati.
-
-## Stack
-
-- React 18, Vite 5, Tailwind 4, jsPDF, html2canvas, OpenRouter (via proxy in produzione).
+Per segnalazioni tecniche sul codice, usare le issue del repository mantenendo fuori credenziali e dati sensibili.
