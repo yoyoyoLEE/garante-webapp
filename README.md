@@ -99,6 +99,18 @@ Flusso: lavori in Cursor → `git push` sul branch **`main`** → GitHub Actions
 
 Il token `FIREBASE_TOKEN` ha gli stessi permessi del tuo account Firebase: trattalo come una password e ruotalo se compromesso (`firebase login:ci` di nuovo e aggiorna il secret).
 
+### Errore CI: `Failed to authenticate, have you run firebase login?`
+
+Significa che **GitHub non sta passando un token valido** a `firebase deploy`. Controlla:
+
+1. **Secret creato nel repo giusto**: apri **Settings** del **repository** del progetto (non le impostazioni globali del profilo GitHub), poi **Secrets and variables** → **Actions**.
+2. **Nome esatto**: `FIREBASE_TOKEN` (maiuscole/minuscole come scritto; niente spazi).
+3. **Valore**: sul PC esegui `firebase login:ci`, copia **tutto** il token che stampa il terminale e incollalo nel secret (una sola riga).
+4. **Account**: l’account Google usato in `firebase login:ci` deve avere accesso al progetto Firebase (`garante-webapp`) come Owner/Editor.
+5. Dopo aver salvato il secret, rilancia il workflow (**Actions** → workflow fallito → **Re-run all jobs**) o fai un commit vuoto e push.
+
+Il warning su Node.js 20 nelle Actions è solo informativo per ora; non è la causa dell’errore di autenticazione.
+
 ## Emulator completo (opzionale)
 
 ```bash

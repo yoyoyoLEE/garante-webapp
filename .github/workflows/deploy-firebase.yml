@@ -39,7 +39,13 @@ jobs:
       - name: Build Vite
         run: npm run build
 
+      # Richiede il secret FIREBASE_TOKEN (vedi README). Senza, firebase risponde: "Failed to authenticate".
       - name: Deploy to Firebase
-        run: npx firebase-tools deploy --only "hosting,functions" --non-interactive
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::error::Secret FIREBASE_TOKEN assente o vuoto. Repo → Settings → Secrets and variables → Actions → New repository secret. Nome esatto: FIREBASE_TOKEN. Valore: token da \`firebase login:ci\` sul PC (account con permesso deploy sul progetto Firebase)."
+            exit 1
+          fi
+          npx firebase-tools deploy --only "hosting,functions" --non-interactive
