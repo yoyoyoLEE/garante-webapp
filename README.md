@@ -76,40 +76,51 @@ Dopo il deploy, l’app su `https://<project>.web.app` userà `POST /api/openrou
 
 Flusso: lavori in Cursor → `git push` sul branch **`main`** → GitHub Actions esegue build e `firebase deploy`.
 
-1. **Collega il repository** a GitHub (se non l’hai già fatto): crea il repo su GitHub, poi nella cartella del progetto:
-   ```bash
-   git remote add origin https://github.com/TUO_UTENTE/garante-webapp.git
-   git push -u origin main
-   ```
-   Se il branch predefinito su GitHub è `master`, rinominalo in `main` oppure modifica il file [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) sostituendo `main` con `master`.
+L’autenticazione usa un **account di servizio Google** (JSON), come raccomandato da `firebase-tools` al posto di `FIREBASE_TOKEN` (deprecato).
 
-2. **Crea un token CI per Firebase** (sul tuo PC, una tantum):
-   ```bash
-   firebase login:ci
-   ```
-   Si apre il browser; al termine il terminale mostra un **token** lungo. **Non** condividerlo e **non** committarlo.
+### 1. Crea l’account di servizio (Google Cloud Console)
 
-3. **Aggiungi il secret su GitHub**: repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**  
-   - Nome: `FIREBASE_TOKEN`  
-   - Valore: incolla il token ottenuto al passo 2.
+1. Apri [Google Cloud Console](https://console.cloud.google.com/) e seleziona il progetto **stesso** del tuo Firebase (es. `garante-webapp`).
+2. **IAM e amministrazione** → **Account di servizio** → **Crea account di servizio**.
+3. Nome es. `github-actions-firebase-deploy` → **Crea e continua**.
+4. **Concedi a questo account di servizio l’accesso al progetto**: aggiungi il ruolo **Editor** (`Editor`) sul progetto.  
+   (In ambienti più restrittivi si possono usare ruoli più granulari; per un repo personale è il modo più semplice per far funzionare Hosting + Functions Gen2 + Build.)
+5. **Fine** → apri l’account creato → scheda **Chiavi** → **Aggiungi chiave** → **Crea nuova chiave** → formato **JSON** → scarica il file **una sola volta**.
 
-4. **Committa e pusha** il workflow (`.github/workflows/deploy-firebase.yml`) e [`.firebaserc`](.firebaserc) con il **project ID** corretto (`default` deve essere il tuo progetto Firebase, es. `garante-webapp`).
+### 2. Cosa mettere in `FIREBASE_SERVICE_ACCOUNT_JSON` (spiegazione dettagliata)
 
-5. Ogni **push su `main`** parte il workflow **Deploy Firebase** (scheda **Actions** del repo). Puoi anche lanciarlo a mano: **Actions** → **Deploy Firebase** → **Run workflow**.
+**Non è un testo che inventi tu.** È **l’intero contenuto del file `.json`** che Google scarica quando crei la chiave (passo 1, punto 5).
 
-Il token `FIREBASE_TOKEN` ha gli stessi permessi del tuo account Firebase: trattalo come una password e ruotalo se compromesso (`firebase login:ci` di nuovo e aggiorna il secret).
+1. Sul PC trovi un file con nome tipo `garante-webapp-xxxxx.json` (il nome può variare).
+2. Aprilo con **Blocco note** / VS Code / qualsiasi editor di testo.
+3. Seleziona **tutto** (`Ctrl+A`), **copia** (`Ctrl+C`).
+4. Su GitHub: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
+   - **Name:** esattamente `FIREBASE_SERVICE_ACCOUNT_JSON` (maiuscole/minuscole come scritto).
+   - **Secret:** incolla **tutto** quello che hai copiato. Deve iniziare con `{` e finire con `}`.
 
-### Errore CI: `Failed to authenticate, have you run firebase login?`
+**Come capisci che è il file giusto:** dentro ci sono campi come `"type": "service_account"`, `"project_id": "garante-webapp"` (o il tuo ID progetto), `"private_key": "-----BEGIN PRIVATE KEY-----\n...`, `"client_email": "qualcosa@....iam.gserviceaccount.com"`.  
+Se vedi queste cose, è il JSON corretto.
 
-Significa che **GitHub non sta passando un token valido** a `firebase deploy`. Controlla:
+**Cosa non va messo nel secret:**
 
-1. **Secret creato nel repo giusto**: apri **Settings** del **repository** del progetto (non le impostazioni globali del profilo GitHub), poi **Secrets and variables** → **Actions**.
-2. **Nome esatto**: `FIREBASE_TOKEN` (maiuscole/minuscole come scritto; niente spazi).
-3. **Valore**: sul PC esegui `firebase login:ci`, copia **tutto** il token che stampa il terminale e incollalo nel secret (una sola riga).
-4. **Account**: l’account Google usato in `firebase login:ci` deve avere accesso al progetto Firebase (`garante-webapp`) come Owner/Editor.
-5. Dopo aver salvato il secret, rilancia il workflow (**Actions** → workflow fallito → **Re-run all jobs**) o fai un commit vuoto e push.
+- Il vecchio **token** da `firebase login:ci` (stringa corta, non è un JSON).
+- Solo il **project ID** o solo l’email dell’account di servizio.
+- Un JSON **tagliato** a metà o modificato a mano.
+- **Mai** committare questo file nel repository: solo nel secret GitHub.
 
-Il warning su Node.js 20 nelle Actions è solo informativo per ora; non è la causa dell’errore di autenticazione.
+- **(Opzionale)** Se avevi ancora il secret `FIREBASE_TOKEN`, puoi eliminarlo: il workflow non lo usa più.
+
+### 3. Push su `main`
+
+Il file [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) esegue `google-github-actions/auth` e poi `firebase deploy`. Ogni push su **`main`** avvia il deploy; puoi anche usare **Actions** → **Deploy Firebase** → **Run workflow**.
+
+### Errori CI comuni
+
+- **`Failed to list functions` / errori IAM**: l’account di servizio non ha ruoli sufficienti sul progetto; verifica il ruolo **Editor** (o equivalenti per Cloud Functions / Cloud Build).
+- **Secret mancante o nome sbagliato**: il nome deve essere esattamente `FIREBASE_SERVICE_ACCOUNT_JSON`.
+- **JSON troncato o modificato**: incolla l’intero JSON valido, senza virgolette extra attorno.
+
+Il warning su **Node.js 20** nelle Actions è informativo; separato dai problemi di deploy.
 
 ## Emulator completo (opzionale)
 

@@ -1,5 +1,6 @@
 # Deploy automatico su Firebase Hosting + Cloud Functions al push su main.
-# Richiede il secret FIREBASE_TOKEN nel repository GitHub (vedi README).
+# Autenticazione CI: account di servizio Google (secret FIREBASE_SERVICE_ACCOUNT_JSON).
+# FIREBASE_TOKEN è deprecato in firebase-tools; non usarlo.
 
 name: Deploy Firebase
 
@@ -16,9 +17,17 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,13 +48,5 @@ jobs:
       - name: Build Vite
         run: npm run build
 
-      # Richiede il secret FIREBASE_TOKEN (vedi README). Senza, firebase risponde: "Failed to authenticate".
       - name: Deploy to Firebase
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: |
-          if [ -z "$FIREBASE_TOKEN" ]; then
-            echo "::error::Secret FIREBASE_TOKEN assente o vuoto. Repo → Settings → Secrets and variables → Actions → New repository secret. Nome esatto: FIREBASE_TOKEN. Valore: token da \`firebase login:ci\` sul PC (account con permesso deploy sul progetto Firebase)."
-            exit 1
-          fi
-          npx firebase-tools deploy --only "hosting,functions" --non-interactive
+        run: npx firebase-tools deploy --only "hosting,functions" --non-interactive
