@@ -1,0 +1,45 @@
+# Deploy automatico su Firebase Hosting + Cloud Functions al push su main.
+# Richiede il secret FIREBASE_TOKEN nel repository GitHub (vedi README).
+
+name: Deploy Firebase
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: firebase-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Install dependencies (root)
+        run: npm ci
+
+      - name: Install dependencies (functions)
+        working-directory: functions
+        run: npm ci
+
+      - name: Build Vite
+        run: npm run build
+
+      - name: Deploy to Firebase
+        run: npx firebase-tools deploy --only "hosting,functions" --non-interactive
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

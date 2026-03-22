@@ -57,20 +57,47 @@ npm run dev
 
 Assicurati che `VITE_FIREBASE_PROJECT_ID` in `.env.local` corrisponda al project in `.firebaserc`.
 
-## Build e deploy
+## Build e deploy (manuale dal PC)
 
 ```bash
 npm run build
-firebase deploy --only hosting,functions
+firebase deploy --only "hosting,functions"
 ```
 
-Oppure deploy completo:
+Su **PowerShell** usa le virgolette attorno a `hosting,functions`. Oppure:
 
 ```bash
 firebase deploy
 ```
 
 Dopo il deploy, l’app su `https://<project>.web.app` userà `POST /api/openrouter` con rewrite definito in [`firebase.json`](firebase.json).
+
+## Deploy automatico da GitHub (CI)
+
+Flusso: lavori in Cursor → `git push` sul branch **`main`** → GitHub Actions esegue build e `firebase deploy`.
+
+1. **Collega il repository** a GitHub (se non l’hai già fatto): crea il repo su GitHub, poi nella cartella del progetto:
+   ```bash
+   git remote add origin https://github.com/TUO_UTENTE/garante-webapp.git
+   git push -u origin main
+   ```
+   Se il branch predefinito su GitHub è `master`, rinominalo in `main` oppure modifica il file [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) sostituendo `main` con `master`.
+
+2. **Crea un token CI per Firebase** (sul tuo PC, una tantum):
+   ```bash
+   firebase login:ci
+   ```
+   Si apre il browser; al termine il terminale mostra un **token** lungo. **Non** condividerlo e **non** committarlo.
+
+3. **Aggiungi il secret su GitHub**: repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**  
+   - Nome: `FIREBASE_TOKEN`  
+   - Valore: incolla il token ottenuto al passo 2.
+
+4. **Committa e pusha** il workflow (`.github/workflows/deploy-firebase.yml`) e [`.firebaserc`](.firebaserc) con il **project ID** corretto (`default` deve essere il tuo progetto Firebase, es. `garante-webapp`).
+
+5. Ogni **push su `main`** parte il workflow **Deploy Firebase** (scheda **Actions** del repo). Puoi anche lanciarlo a mano: **Actions** → **Deploy Firebase** → **Run workflow**.
+
+Il token `FIREBASE_TOKEN` ha gli stessi permessi del tuo account Firebase: trattalo come una password e ruotalo se compromesso (`firebase login:ci` di nuovo e aggiorna il secret).
 
 ## Emulator completo (opzionale)
 
