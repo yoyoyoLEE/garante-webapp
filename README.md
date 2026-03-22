@@ -1,169 +1,50 @@
 # Garante Web App
 
-Applicazione web per supportare la **generazione** e la **valutazione** di materiali nel contesto del protocollo Garante (dataset multimodale, referti sintetici, confronto tra bracci e indicatori FAIR-V). Questo documento descrive come **configurare un ambiente indipendente** e **ripetere le procedure** su una propria infrastruttura.
+**Garante Web App** è uno strumento software per la **simulazione controllata** e la **valutazione comparativa** di flussi clinico-documentali nel contesto del **protocollo Garante**. Non sostituisce il giudizio clinico né costituisce dispositivo medico: mette a disposizione un laboratorio digitale in cui generare **dataset sintetici multimodali** e misurare quanto bene diversi “operatori” (umani o automatici) **estraggano** le stesse informazioni strutturate da materiali coerenti con un episodio chirurgico fittizio.
 
 ---
 
-## 1. Cosa contiene il repository
+## Perché esiste
 
-| Modulo | Funzione |
-|--------|----------|
-| **Generatore multimodale** | Orchestrazione della generazione procedurale (testo / allegati) tramite modelli accessibili via [OpenRouter](https://openrouter.ai/). |
-| **Motore di valutazione** | Caricamento output sperimentali, confronto statistico tra bracci, calcolo DES e metriche di efficienza. |
-| **Report FAIR-V** | Esportazione e visualizzazione strutturata dei risultati. |
-
-Il frontend è **React 18** (Vite 5) con **Tailwind CSS**. Le chiamate ai modelli in produzione passano da una **Cloud Function** che funge da proxy (chiave OpenRouter solo lato server). L’accesso all’app richiede **Firebase Authentication** (e-mail/password e/o Google).
+Il protocollo mira a confrontare, in modo **ripetibile** e **quantificabile**, più modalità di produzione o di lettura della documentazione (per esempio diversi **bracci sperimentali** o diversi **modelli linguistici**) sullo **stesso** insieme di variabili cliniche. L’app supporta due momenti: **generare** i materiali secondo regole note, e **valutare** l’estrazione dati confrontandola con un **riferimento** (ground truth) definito a monte.
 
 ---
 
-## 2. Architettura di riferimento
+## Generatore multimodale
 
-```
-Browser (Hosting Firebase)
-  → login Firebase Auth (ID token)
-  → POST /api/openrouter + Authorization: Bearer <token>
-       → Cloud Function `openrouter` (verifica token, Secret OPENROUTER_API_KEY)
-       → API OpenRouter
-```
+Questa sezione produce un **dataset** di casi sintetici impostato su **330 pazienti** e, per ciascuno, **tre documenti** che rappresentano canali informativi diversi:
 
-In sviluppo è possibile usare l’**emulator** delle Functions e/o chiamate **dirette** a OpenRouter con chiave solo in `.env.local` (non committata).
+- testo di **ingresso** (`txt_ingresso`);
+- **quadro operatorio** in forma testuale descrittiva (`jpg_operatorio` — contenuto testuale strutturato come referto di sala, non un file immagine binario);
+- **lettera di dimissione** (`pdf_dimissione` — ancora come testo strutturato nel flusso di generazione).
 
-File rilevanti: [`firebase.json`](firebase.json), [`functions/index.js`](functions/index.js), [`vite.config.js`](vite.config.js).
+Le variabili cliniche seguono uno schema codificato (**V01–V20** per i dati demografici e di percorso, **H01–H03** per aspetti aggiuntivi come dispositivo energetico in sala, invio pezzi istologici, allergie). I casi sono costruiti a partire da **percorsi coerenti** (diagnosi di ricovero, setting di ammissione, tipo di intervento e approccio chirurgico collegati tra loro), così da evitare combinazioni incoerenti pur restando in ambito simulato.
 
----
+La parte testuale “ricca” dei tre documenti può essere **generata da modelli linguistici** (accessibili tramite provider compatibile con **OpenRouter**), con istruzioni vincolate a restituire un **unico oggetto JSON** con esattamente le tre stringhe previste. È possibile introdurre, a fini di stress test del motore di valutazione, **alterazioni controllate** del contenuto (simulazione di referti corrotti o incompleti) e gestire **sessioni**, **checkpoint** ed **export** (ad esempio archivi compressi e report in PDF) per documentare le run sperimentali.
 
-## 3. Prerequisiti
-
-- **Node.js** 20+
-- Account **Firebase** (progetto dedicato alla propria replica) e [Firebase CLI](https://firebase.google.com/docs/cli) (`npm i -g firebase-tools`)
-- Account **OpenRouter** e chiave API per i modelli scelti
-- Piano **Blaze** (Google Cloud) se si usano Cloud Functions che effettuano richieste HTTP esterne; si consiglia di impostare **alert di budget** nella console Google Cloud
+In sintesi, il generatore non “inventa un paziente reale”: produce **cartelle cliniche fittizie** utilizzabili per confrontare metodi di estrazione o di generazione in condizioni **note** e **riproducibili** (inclusa la scelta del modello e dei parametri di generazione).
 
 ---
 
-## 4. Installazione locale
+## Motore di valutazione e report FAIR-V
 
-```bash
-git clone <URL-del-repository>
-cd garante-webapp
-npm install
-cd functions && npm install && cd ..
-```
+Il motore di valutazione confronta, per ogni paziente e per un insieme fissato di **variabili di estrazione**, il valore **di riferimento** con il valore **osservato** (per esempio output di un sistema automatico o di una trascrizione cieca), variabile per variabile. Il confronto alimenta il calcolo del **DES (Data Extraction Score)**: punteggio **0–20** per paziente, sintesi della corrispondenza rispetto al ground truth sulle variabili definite per lo studio.
 
-Copiare [`.env.example`](.env.example) in **`.env.local`** nella root e compilare le variabili (vedi §5). Il file `.env.local` non va incluso in pubblicazioni né committato.
+I casi sono organizzati in **tre bracci** denominati **A1**, **A2** e **B**, così da poter confrontare parallelamente tre condizioni sperimentali sullo stesso disegno. Dalle serie di DES derivano indicatori operativi quali:
 
-Impostare il proprio proget Firebase in [`.firebaserc`](.firebaserc) oppure:
+- **EE (Extraction Efficiency)** — rapporto tra DES medio e un tempo totale associato alla run (efficienza dell’estrazione nel tempo);
+- **DLC (Data Loss / Leakage Coefficient)** — coefficiente percentuale legato a perdita o dispersione di informazione, utilizzabile come parametro di studio quando definito nel protocollo.
 
-```bash
-firebase login
-firebase use --add
-```
+La sezione **report FAIR-V** sintetizza i risultati aggregati: include un test **non parametrico di Friedman** sulle serie di DES tra i tre bracci (con correzione tipo **Bonferroni** per confronti multipli dove applicato nel codice) e offre una lettura **divulgativa** delle differenze tra bracci, con possibilità di esportazione per documentazione o pubblicazione.
 
 ---
 
-## 5. Variabili d’ambiente (frontend)
+## Accesso e uso responsabile
 
-Tutti i nomi con prefisso `VITE_` sono incorporati nel bundle al **momento del build**; non sono adatti a segreti ad alta sensibilità (la “Web API key” di Firebase è pubblica per design, con restrizioni lato Google Cloud / domini autorizzati).
-
-| Variabile | Ruolo |
-|-----------|--------|
-| `VITE_FIREBASE_API_KEY` | Config SDK Firebase (Console → Impostazioni progetto → App Web) |
-| `VITE_FIREBASE_AUTH_DOMAIN` | Dominio Auth |
-| `VITE_FIREBASE_PROJECT_ID` | ID progetto (coerente con `.firebaserc`; usato dal proxy Vite verso l’emulator) |
-| `VITE_FIREBASE_STORAGE_BUCKET` | Bucket Storage indicato in console |
-| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Sender ID |
-| `VITE_FIREBASE_APP_ID` | App ID |
-| `VITE_OPENROUTER_API_KEY` | *(Opzionale)* Solo sviluppo: chiamata diretta al provider, senza proxy |
-| `VITE_USE_OPENROUTER_PROXY` | `true` forza l’uso del proxy anche se è presente la chiave locale |
+L’accesso all’applicazione è **riservato** (autenticazione con credenziali o account terzi configurati dall’amministratore del servizio). I dati prodotti negli esperimenti sono **sintetici** rispetto al disegno del generatore; resta comunque opportuno trattare export, log e eventuali annotazioni secondo le **norme etiche e privacy** del proprio istituto e del protocollo di ricerca approvato.
 
 ---
 
-## 6. Firebase: Authentication e Hosting
+## Nota
 
-1. Nella **Firebase Console**, abilitare i metodi desiderati (es. **E-mail/Password**, **Google**).
-2. In **Authentication → Settings → Authorized domains** includere `localhost` (sviluppo) e i domini Hosting (`<project-id>.web.app`, `<project-id>.firebaseapp.com`).
-3. Opzionale ma consigliato: in **Google Cloud Console → API e servizi → Credenziali**, applicare **restrizioni** alla chiave API browser (referrer HTTP, API consentite) coerenti con i domini di deploy.
-
-Senza autenticazione valida, la function `openrouter` risponde **401** (token Firebase obbligatorio).
-
----
-
-## 7. Segreto OpenRouter (solo server)
-
-```bash
-firebase functions:secrets:set OPENROUTER_API_KEY
-```
-
-Incollare la chiave quando richiesto. Non versionare mai chiavi in repository o in issue pubbliche.
-
----
-
-## 8. Esecuzione in sviluppo
-
-**Solo frontend** (senza proxy Functions):
-
-```bash
-npm run dev
-```
-
-Se in `.env.local` è assente `VITE_OPENROUTER_API_KEY`, avviare l’emulator e usare il proxy (stesso `VITE_FIREBASE_PROJECT_ID` di `.firebaserc`):
-
-```bash
-# Terminale 1
-firebase emulators:start --only functions
-
-# Terminale 2
-npm run dev
-```
-
-Emulator completo (hosting + functions): `firebase emulators:start` (porte in [`firebase.json`](firebase.json)).
-
----
-
-## 9. Build e deploy manuale
-
-```bash
-npm run build
-firebase deploy --only "hosting,functions"
-```
-
-Su **Windows PowerShell** mantenere le virgolette attorno a `hosting,functions`. Dopo il deploy, l’app risponde su `https://<project-id>.web.app`; il rewrite `/api/openrouter` è definito in `firebase.json`.
-
----
-
-## 10. Deploy continuo con GitHub Actions (opzionale)
-
-Il workflow [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) esegue build e `firebase deploy` al push su `main`.
-
-### 10.1 Autenticazione del workflow (account di servizio)
-
-1. **Google Cloud Console** (progetto collegato a Firebase) → **IAM** → **Account di servizio** → creare un account dedicato al CI.
-2. Assegnare al progetto un ruolo sufficiente per Hosting, Cloud Functions (Gen 2), Cloud Build e Artifact Registry (in ambienti controllati si possono usare ruoli più granulari del generico **Editor**).
-3. Creare una **chiave JSON** (una tantum), scaricarla in modo sicuro.
-4. Nel repository GitHub: **Settings → Secrets and variables → Actions → New repository secret**
-   - Nome: `FIREBASE_SERVICE_ACCOUNT_JSON`
-   - Valore: **intero contenuto** del file JSON (da `{` a `}`), senza committare il file nel repo.
-
-Riferimento ufficiale: [Autenticazione Google Cloud](https://cloud.google.com/docs/authentication/getting-started).
-
-### 10.2 Variabili per il build Vite su GitHub
-
-Le stesse chiavi del §5 devono essere definite come **Repository variables** (scheda **Variables**, non come corpo di un unico secret): **Name** = nome variabile, **Value** = **solo il valore** come dopo `=` in `.env.local` — **non** anteporre `VITE_FIREBASE_API_KEY=` nel campo valore (causerebbe errore `auth/api-key-not-valid` in produzione).
-
-Nomi attesi: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`.
-
----
-
-## 11. Riproduttibilità e dati
-
-- Non pubblicare file `.env`, `.env.local`, chiavi API né export di dati identificabili senza autorizzazione etica/legale del contesto di studio.
-- Documentare nel proprio articolo o allegato: **versione del commit**, **modelli OpenRouter** e parametri usati, **seed** o checkpoint se applicabili (il codice può evolvere: il commit fissa lo stato del software).
-- Dopo studi condivisi, valutare **rotazione** delle chiavi esposte in ambienti non più controllati.
-
----
-
-## 12. Stack tecnico
-
-React 18.3, Vite 5, Tailwind 4, Firebase (Auth, Hosting, Functions v2), OpenRouter (proxy server-side), jsPDF, html2canvas, Papa Parse, SheetJS (xlsx), Lucide React.
-
-Per segnalazioni tecniche sul codice, usare le issue del repository mantenendo fuori credenziali e dati sensibili.
+Questo documento descrive **cosa fa** l’applicazione dal punto di vista scientifico-operativo. I dettagli di installazione, configurazione e manutenzione restano nel **codice sorgente** e negli eventuali materiali tecnici allegati al repository, senza duplicarli qui.
