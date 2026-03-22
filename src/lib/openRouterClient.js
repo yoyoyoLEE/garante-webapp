@@ -1,3 +1,5 @@
+import { getFirebaseAuth } from './firebase.js'
+
 /**
  * Modalità proxy: nessuna chiave nel bundle (deploy Firebase) oppure forzata con VITE_USE_OPENROUTER_PROXY.
  * Modalità diretta: VITE_OPENROUTER_API_KEY in .env.local (solo sviluppo locale).
@@ -16,9 +18,20 @@ export async function fetchOpenRouterChatCompletion({ apiKey, referer, openRoute
   const useProxy = shouldUseOpenRouterProxy()
 
   if (useProxy) {
+    const auth = getFirebaseAuth()
+    const user = auth?.currentUser
+    if (!user) {
+      throw new Error(
+        'Sessione non valida. Effettua l\'accesso per usare il proxy OpenRouter.',
+      )
+    }
+    const idToken = await user.getIdToken()
     return fetch('/api/openrouter', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
       body: JSON.stringify({ referer, openRouterBody }),
     })
   }

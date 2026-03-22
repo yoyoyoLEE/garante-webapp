@@ -22,7 +22,20 @@ Vedi [`.env.example`](.env.example) per i nomi delle variabili (senza valori seg
    firebase login
    firebase use --add
    ```
-2. Allinea `VITE_FIREBASE_PROJECT_ID` in `.env.local` allo stesso project ID (per il proxy Vite → emulator).
+2. Crea **`.env.local`** con le variabili `VITE_FIREBASE_*` da Firebase Console → **Impostazioni progetto** → **Le tue app** (oggetto `firebaseConfig`). Servono per **Authentication** (login e-mail/Google) e per il proxy OpenRouter.
+
+### Autenticazione (e-mail + Google)
+
+- In **Firebase Console → Authentication** abilita **E-mail/Password** e **Google** (come hai già fatto).
+- In **Authentication → Settings → Authorized domains** assicurati che ci siano `localhost` (sviluppo) e il dominio Hosting (`<project>.web.app`, `<project>.firebaseapp.com`).
+- L’app mostra la schermata di **login** finché l’utente non è autenticato; in sidebar c’è **Esci**.
+- La Cloud Function `openrouter` accetta solo richieste con **`Authorization: Bearer <ID token Firebase>`** (token dell’utente loggato). Senza login non è possibile usare il proxy in produzione.
+
+### Deploy CI (GitHub Actions)
+
+Per il build su GitHub, imposta le **stesse** chiavi `VITE_FIREBASE_*` come **Repository variables** (vanno bene come Variables: finiscono comunque nel bundle JS pubblico).  
+**Settings → Secrets and variables → Actions → tab Variables** e aggiungi: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`.  
+Il workflow [`.github/workflows/deploy-firebase.yml`](.github/workflows/deploy-firebase.yml) le passa già a `npm run build`.
 
 ## Secret OpenRouter (solo server)
 

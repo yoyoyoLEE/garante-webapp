@@ -1,8 +1,14 @@
 /**
  * Proxy HTTPS verso OpenRouter: la chiave API esiste solo come Secret (mai nel client).
+ * Richiede Firebase Authentication: header Authorization: Bearer <ID token>.
  */
+const admin = require('firebase-admin')
 const { onRequest } = require('firebase-functions/v2/https')
 const { defineSecret } = require('firebase-functions/params')
+
+if (!admin.apps.length) {
+  admin.initializeApp()
+}
 
 const openRouterApiKey = defineSecret('OPENROUTER_API_KEY')
 
@@ -35,7 +41,7 @@ function setCors(req, res) {
     res.set('Access-Control-Allow-Origin', '*')
   }
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-  res.set('Access-Control-Allow-Headers', 'Content-Type')
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   res.set('Access-Control-Max-Age', '3600')
 }
 
@@ -57,6 +63,20 @@ exports.openrouter = onRequest(
 
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method Not Allowed' })
+      return
+    }
+
+    const authHeader = req.headers.authorization
+    if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'Unauthorized: token mancante' })
+      return
+    }
+    const idToken = authHeader.slice(7)
+    try {
+      await admin.auth().verifyIdToken(idToken)
+    } catch (e) {
+      console.warn('verifyIdToken failed', e?.message || e)
+      res.status(401).json({ error: 'Unauthorized: token non valido' })
       return
     }
 

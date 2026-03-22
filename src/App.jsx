@@ -2,11 +2,16 @@ import { useMemo, useState } from 'react'
 import {
   ClipboardCheck,
   FileText,
+  Loader2,
+  LogOut,
   ShieldCheck,
   Stethoscope,
 } from 'lucide-react'
 import GeneratorEngine from './components/GeneratorEngine'
 import EvaluatorEngine from './components/EvaluatorEngine'
+import LoginPage from './components/LoginPage.jsx'
+import FirebaseConfigMissing from './components/FirebaseConfigMissing.jsx'
+import { useAuth } from './contexts/AuthContext.jsx'
 
 function App() {
   const tabs = useMemo(
@@ -32,10 +37,28 @@ function App() {
   const [activeTabId, setActiveTabId] = useState(tabs[0].id)
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
 
+  const { firebaseReady, user, loading, signOut } = useAuth()
+
+  if (!firebaseReady) {
+    return <FirebaseConfigMissing />
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-600">
+        <Loader2 className="h-10 w-10 animate-spin text-indigo-600" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LoginPage />
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto grid min-h-screen max-w-[1600px] grid-cols-1 lg:grid-cols-[280px_1fr]">
-        <aside className="flex flex-col gap-8 bg-slate-900 p-8 text-slate-100 shadow-sm">
+        <aside className="flex min-h-screen flex-col gap-8 bg-slate-900 p-8 text-slate-100 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-indigo-600/90 p-2">
               <ShieldCheck className="h-5 w-5" />
@@ -80,6 +103,23 @@ function App() {
               )
             })}
           </nav>
+
+          <div className="mt-auto border-t border-slate-700 pt-6">
+            <p
+              className="mb-2 truncate text-xs text-slate-500"
+              title={user.email ?? ''}
+            >
+              {user.email ?? user.uid}
+            </p>
+            <button
+              type="button"
+              onClick={() => signOut()}
+              className="flex w-full items-center gap-2 rounded-lg px-4 py-2 text-left text-sm text-slate-300 transition hover:bg-slate-800 hover:text-white"
+            >
+              <LogOut className="h-4 w-4" />
+              Esci
+            </button>
+          </div>
         </aside>
 
         <main className="p-8 lg:p-10">
