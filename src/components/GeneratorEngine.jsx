@@ -11,6 +11,7 @@ import {
   PlayCircle,
   Square,
 } from 'lucide-react'
+import { fetchOpenRouterChatCompletion, shouldUseOpenRouterProxy } from '../lib/openRouterClient.js'
 
 const TOTAL_PATIENTS = 330
 const TOTAL_FILES = TOTAL_PATIENTS * 3
@@ -29,6 +30,15 @@ const RUN_LOG_STORAGE_KEY = 'garante.generator.runlog.v2'
 const APP_VERSION = '0.0.0'
 const CORRUPTED_MARKER = '[CORRUPTED_FILE]'
 const DOC_KEYS = ['txt_ingresso', 'jpg_operatorio', 'pdf_dimissione']
+
+const BOOLEAN_VARIABLE_KEYS = new Set([
+  'diabetesMellitus',
+  'hypertension',
+  'intraoperativeComplications',
+  'antibioticProphylaxis',
+  'postopSurgicalSiteInfection',
+  'pathologySpecimenSent',
+])
 
 const CLINICAL_VARIABLES = [
   { id: 'V01', key: 'age' },
@@ -78,8 +88,84 @@ function pickFrom(list, rng) {
   return list[Math.floor(rng() * list.length)]
 }
 
+/** Percorsi coerenti: diagnosi ↔ setting di ricovero ↔ procedura (niente mismatch casuali). */
+const CLINICAL_CASE_BUNDLES = [
+  {
+    admissionSetting: 'Elective',
+    primaryDiagnosis: 'Colelitiasi sintomatica sottoposta a Colecistectomia VLS',
+    surgicalProcedure: 'Colecistectomia',
+    preferredApproaches: ['Laparoscopic', 'Robotic'],
+  },
+  {
+    admissionSetting: 'Elective',
+    primaryDiagnosis: 'Ernia inguinale monolaterale sottoposta a Ernioplastica inguinale',
+    surgicalProcedure: 'Ernioplastica',
+    preferredApproaches: ['Open', 'Laparoscopic'],
+  },
+  {
+    admissionSetting: 'Elective',
+    primaryDiagnosis: 'Ernia crurale sottoposta a Ernioplastica crurale',
+    surgicalProcedure: 'Ernioplastica',
+    preferredApproaches: ['Open', 'Laparoscopic'],
+  },
+  {
+    admissionSetting: 'Elective',
+    primaryDiagnosis: 'Neoplasia del colon sottoposta a Resezione colica',
+    surgicalProcedure: 'Resezione colica',
+    preferredApproaches: ['Laparoscopic', 'Open', 'Robotic'],
+  },
+  {
+    admissionSetting: 'Elective',
+    primaryDiagnosis: 'Ernia ombelicale sottoposta a Ernioplastica ombelicale',
+    surgicalProcedure: 'Ernioplastica',
+    preferredApproaches: ['Open', 'Laparoscopic'],
+  },
+  {
+    admissionSetting: 'Urgent',
+    primaryDiagnosis: 'Appendicite acuta sottoposta a Appendicectomia',
+    surgicalProcedure: 'Appendicectomia',
+    preferredApproaches: ['Laparoscopic', 'Open'],
+  },
+  {
+    admissionSetting: 'Urgent',
+    primaryDiagnosis: 'Occlusione intestinale sottoposta a Laparotomia esplorativa',
+    surgicalProcedure: 'Laparotomia esplorativa',
+    preferredApproaches: ['Open'],
+  },
+  {
+    admissionSetting: 'Urgent',
+    primaryDiagnosis: 'Peritonite da ulcera perforata sottoposta a Sutura gastrica',
+    surgicalProcedure: 'Laparotomia esplorativa',
+    preferredApproaches: ['Open'],
+  },
+  {
+    admissionSetting: 'Urgent',
+    primaryDiagnosis: "Colecistite acuta sottoposta a Colecistectomia d'urgenza",
+    surgicalProcedure: 'Colecistectomia',
+    preferredApproaches: ['Laparoscopic', 'Open'],
+  },
+  {
+    admissionSetting: 'Urgent',
+    primaryDiagnosis: "Ernia inguinale incarcerata sottoposta a Ernioplastica d'urgenza",
+    surgicalProcedure: 'Ernioplastica',
+    preferredApproaches: ['Open', 'Laparoscopic'],
+  },
+]
+
 function boolToYesNo(v) {
   return v ? 'Yes' : 'No'
+}
+
+/** Raggruppa le variabili cliniche per file assegnato dalla maschera. */
+function groupVariablesByDocument(variableToDoc) {
+  const out = { txt_ingresso: [], jpg_operatorio: [], pdf_dimissione: [] }
+  for (const variable of CLINICAL_VARIABLES) {
+    const doc = variableToDoc[variable.key]
+    if (doc && out[doc]) {
+      out[doc].push(variable.key)
+    }
+  }
+  return out
 }
 
 function sleep(ms) {
@@ -189,6 +275,18 @@ async function fileExistsInDirectory(dirHandle, fileName) {
   }
 }
 
+/** Resume solo se i 3 output per quel paziente esistono davvero su disco (non dalla sessione RAM). */
+async function patientOutputsCompleteOnDisk(dirHandle, patientPrefix) {
+  const txt = `${patientPrefix}_Ingresso.txt`
+  const pdf = `${patientPrefix}_Dimissione.pdf`
+  const jpg = `${patientPrefix}_Operatorio.jpg`
+  return (
+    (await fileExistsInDirectory(dirHandle, txt)) &&
+    (await fileExistsInDirectory(dirHandle, pdf)) &&
+    (await fileExistsInDirectory(dirHandle, jpg))
+  )
+}
+
 async function writeGroundTruthCsvLive(dirHandle, rows) {
   const csvColumns = ['patientId', ...CLINICAL_VARIABLES.map((variable) => variable.key)]
   const csvRows = rows.map((row) => {
@@ -295,45 +393,26 @@ async function createJpgBlobFromText(patientId, text) {
 
 function buildPatient(seed, patientIndex) {
   const rng = mulberry32(hashSeed(`${seed}-${patientIndex}`))
-  const isUrgent = rng() >= 0.5
+  const bundle = pickFrom(CLINICAL_CASE_BUNDLES, rng)
   const sex = rng() >= 0.5 ? 'M' : 'F'
-  const approach = pickFrom(['Open', 'Laparoscopic', 'Robotic'], rng)
+  const approach = pickFrom(bundle.preferredApproaches, rng)
   const age = 18 + Math.floor(rng() * 73)
   const bmi = (18 + rng() * 27).toFixed(1)
   const asaScore = pickFrom(['I', 'II', 'III', 'IV'], rng)
-
-  const electiveDx = [
-    'Colelitiasi sintomatica sottoposta a Colecistectomia VLS',
-    'Ernia inguinale monolaterale sottoposta a Ernioplastica',
-    'Neoplasia del colon sottoposta a Resezione colica',
-  ]
-  const urgentDx = [
-    'Appendicite acuta sottoposta a Appendicectomia',
-    'Occlusione intestinale sottoposta a Laparotomia esplorativa',
-    'Peritonite da ulcera perforata sottoposta a Sutura gastrica',
-  ]
-
-  const procedures = [
-    'Colecistectomia',
-    'Appendicectomia',
-    'Ernioplastica',
-    'Resezione colica',
-    'Laparotomia esplorativa',
-  ]
 
   return {
     patientId: `PT-${String(patientIndex + 1).padStart(3, '0')}`,
     age,
     biologicalSex: sex,
     bmi: Number(bmi),
-    admissionSetting: isUrgent ? 'Urgent' : 'Elective',
-    primaryDiagnosis: isUrgent ? pickFrom(urgentDx, rng) : pickFrom(electiveDx, rng),
+    admissionSetting: bundle.admissionSetting,
+    primaryDiagnosis: bundle.primaryDiagnosis,
     asaScore,
     diabetesMellitus: boolToYesNo(rng() < 0.24),
     hypertension: boolToYesNo(rng() < 0.31),
     preopHemoglobin: Number((10.2 + rng() * 5.5).toFixed(1)),
     preopWbc: Math.round(4200 + rng() * 16000),
-    surgicalProcedure: pickFrom(procedures, rng),
+    surgicalProcedure: bundle.surgicalProcedure,
     surgicalApproach: approach,
     operativeTimeMinutes: Math.round(35 + rng() * 220),
     estimatedBloodLossMl: Math.round(rng() * 700),
@@ -373,6 +452,178 @@ function computeCorruption(seed, patientIndex) {
   }
 }
 
+const REDACT_PLACEHOLDER = '[omissis]'
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Frasi contestuali per Yes/No (evita di cancellare un "Yes" appartenente ad altra variabile). */
+function booleanPhrasesForKey(key, yn) {
+  const y = String(yn ?? '').trim()
+  const yLower = y.toLowerCase()
+  switch (key) {
+    case 'diabetesMellitus':
+      return [
+        `Diabetes mellitus: ${y}`,
+        `Diabetes mellitus: ${yLower}`,
+        `diabetes mellitus: ${y}`,
+        `Diabetes mellitus:${y}`,
+        `Diabete mellito: ${y}`,
+      ]
+    case 'hypertension':
+      return [
+        `Ipertensione arteriosa: ${y}`,
+        `Ipertensione: ${y}`,
+        `Hypertension: ${y}`,
+        `hypertension: ${yLower}`,
+      ]
+    case 'intraoperativeComplications':
+      return [
+        `Complicanze intraoperatorie: ${y}`,
+        `Complicanze intraoperatorie:${y}`,
+        `Intraoperative complications: ${y}`,
+      ]
+    case 'antibioticProphylaxis':
+      return [`Profilassi antibiotica: ${y}`, `Antibiotic prophylaxis: ${y}`]
+    case 'postopSurgicalSiteInfection':
+      return [`Infezione sito chirurgico: ${y}`, `Surgical site infection: ${y}`]
+    case 'pathologySpecimenSent':
+      return [
+        `Invio pezzo anatomopatologico: ${y}`,
+        `Pathology specimen sent: ${y}`,
+        `Pezzo anatomopatologico: ${y}`,
+      ]
+    default:
+      return []
+  }
+}
+
+function scrubBooleanMisplacedInDoc(text, key) {
+  let t = text
+  for (const yn of ['Yes', 'No']) {
+    for (const p of booleanPhrasesForKey(key, yn)) {
+      if (!p) continue
+      const re = new RegExp(escapeRegExp(p), 'gi')
+      t = t.replace(re, REDACT_PLACEHOLDER)
+    }
+  }
+  return t
+}
+
+/** Solo diagnostica: non blocca la generazione. */
+function warnIfCorruptionPayloadMismatch(patientId, corruptedDocs, finalDocs) {
+  for (const docKey of DOC_KEYS) {
+    if (corruptedDocs[docKey] && finalDocs[docKey] !== CORRUPTED_MARKER) {
+      console.warn(
+        `[Garante] ${patientId}: atteso ${CORRUPTED_MARKER} in ${docKey} per flag corruzione.`,
+      )
+    }
+    if (!corruptedDocs[docKey] && finalDocs[docKey] === CORRUPTED_MARKER) {
+      console.warn(`[Garante] ${patientId}: marker di corruzione in ${docKey} senza flag.`)
+    }
+  }
+}
+
+/**
+ * Rimuove dai documenti NON assegnati i valori della ground truth, così:
+ * - se il documento designato è corrotto → NOT_FOUND nel CSV e il valore non compare altrove nei file;
+ * - l'estrazione da tutti i referti resta allineata alla ground truth.
+ */
+function scrubMisplacedClinicalValues(docPayload, patient, variableToDoc) {
+  const out = { ...docPayload }
+  for (const variable of CLINICAL_VARIABLES) {
+    const key = variable.key
+    const assigned = variableToDoc[key]
+    if (!assigned || !DOC_KEYS.includes(assigned)) continue
+    const raw = patient[key]
+
+    for (const docKey of DOC_KEYS) {
+      if (docKey === assigned) continue
+      let text = out[docKey]
+      if (typeof text !== 'string') continue
+
+      if (key === 'biologicalSex') {
+        const ch = String(raw ?? '').trim()
+        if (ch === 'M' || ch === 'F') {
+          const phrases = [
+            `Sesso: ${ch}`,
+            `sesso: ${ch}`,
+            `Sesso ${ch}`,
+            `sesso ${ch}`,
+            `Sesso biologico: ${ch}`,
+            `sesso biologico: ${ch}`,
+            `Sesso biologico ${ch}`,
+            `sesso biologico ${ch}`,
+          ]
+          if (ch === 'M') phrases.push('maschio', 'Maschio', 'MASCHIO')
+          if (ch === 'F') phrases.push('femmina', 'Femmina', 'FEMMINA')
+          phrases.sort((a, b) => b.length - a.length)
+          for (const p of phrases) {
+            if (p && text.includes(p)) {
+              text = text.split(p).join(REDACT_PLACEHOLDER)
+            }
+          }
+          text = text.replace(new RegExp(`\\b${escapeRegExp(ch)}\\b`, 'g'), REDACT_PLACEHOLDER)
+        }
+        out[docKey] = text
+        continue
+      }
+
+      if (key === 'asaScore') {
+        const s = String(raw ?? '').trim()
+        const phrases = [
+          `Classificazione ASA ${s}`,
+          `classificazione ASA ${s}`,
+          `score ASA ${s}`,
+          `ASA: ${s}`,
+          `ASA ${s}`,
+        ].sort((a, b) => b.length - a.length)
+        for (const p of phrases) {
+          if (p && text.includes(p)) {
+            text = text.split(p).join(REDACT_PLACEHOLDER)
+          }
+        }
+        text = text.replace(new RegExp(`\\b${escapeRegExp(s)}\\b`, 'g'), REDACT_PLACEHOLDER)
+        out[docKey] = text
+        continue
+      }
+
+      if (BOOLEAN_VARIABLE_KEYS.has(key)) {
+        out[docKey] = scrubBooleanMisplacedInDoc(text, key)
+        continue
+      }
+
+      if (typeof raw === 'number') {
+        const re = new RegExp(`(?<!\\d)${escapeRegExp(String(raw))}(?!\\d)`, 'g')
+        text = text.replace(re, REDACT_PLACEHOLDER)
+        if (!Number.isInteger(raw)) {
+          const fixed = raw.toFixed(1)
+          const re2 = new RegExp(`(?<!\\d)${escapeRegExp(fixed)}(?!\\d)`, 'g')
+          text = text.replace(re2, REDACT_PLACEHOLDER)
+          const re3 = new RegExp(`(?<!\\d)${escapeRegExp(fixed.replace('.', ','))}(?!\\d)`, 'g')
+          text = text.replace(re3, REDACT_PLACEHOLDER)
+        }
+        out[docKey] = text
+        continue
+      }
+
+      const literal = String(raw ?? '').trim()
+      if (literal.length < 1) continue
+      if (literal.length >= 2) {
+        text = text.split(literal).join(REDACT_PLACEHOLDER)
+      }
+      out[docKey] = text
+    }
+  }
+  return out
+}
+
+/**
+ * Ground truth = sola fonte di verità per valutazione: deterministica da seed (maschera + corruzione).
+ * I file sono "best effort" (LLM + scrub); non blocchiamo la generazione se il testo non rispecchia
+ * ogni campo al 100%: il valutatore confronta l'estrazione con questa riga.
+ */
 function buildGroundTruth(patient, variableToDoc, corruptedDocs) {
   const groundTruth = { patientId: patient.patientId }
   for (const variable of CLINICAL_VARIABLES) {
@@ -399,12 +650,56 @@ function buildPromptInput(patient, variableToDoc) {
   return {
     patient,
     distributionMask: variableToDoc,
+    variablesByDocument: groupVariablesByDocument(variableToDoc),
     formatRules: {
       language: 'Italiano clinico formale',
       outputShape: ['txt_ingresso', 'jpg_operatorio', 'pdf_dimissione'],
       strictJsonOnly: true,
     },
   }
+}
+
+/**
+ * Istruzioni lunghe per coerenza clinica, logica temporale dei referti e rumore real-world.
+ */
+function buildOpenRouterUserContent(patient, variableToDoc) {
+  const byDoc = groupVariablesByDocument(variableToDoc)
+  const placementLines = DOC_KEYS.map((docKey) => {
+    const keys = byDoc[docKey]
+    const label =
+      keys.length > 0
+        ? `Inserire in modo leggibile i valori ESATTI del JSON paziente per: ${keys.join(', ')}.`
+        : 'Nessuna variabile assegnata: usare solo testo di riempimento rumoroso (no valori strutturati delle altre sezioni).'
+    return `- ${docKey}: ${label}`
+  }).join('\n')
+
+  return `Genera tre referti testuali per lo STESSO episodio chirurgico.
+
+COERENZA CLINICA (obbligatoria):
+- La diagnosi principale (primaryDiagnosis), l'impostazione di ricovero (admissionSetting) e la procedura (surgicalProcedure) descrivono UN SOLO percorso: non aggiungere altre procedure principali né patologie discordanti.
+- Non contraddire i campi numerici/booleani del JSON paziente.
+
+LOGICA TEMPORALE E TIPOLOGIA DOCUMENTALE (obbligatoria — i tre testi devono essere DIVERSI tra loro):
+1) txt_ingresso — referto di ingresso / PS / ricovero: motivo del ricovero, anamnesi breve, esami d'ingresso, quadro iniziale. Può menzionare in programma l'intervento coerente con surgicalProcedure.
+   VIETATO in questo file: giorni totali di degenza, decorso postoperatorio sui giorni successivi, dolore post-op giorno 1 (VAS), infezione della ferita in fase dimissionale, destinazione alla dimissione, formulazioni da lettera di dimissione ("alla dimissione…", "decorso postoperatorio favorevole con degenza di X giorni").
+
+2) jpg_operatorio — verbale operatorio (contestualmente redatto a fine atto): SOLO sala operatoria e atto chirurgico (tecnica, approccio, tempi operatori, emorragia stimata, complicanze intraoperatorie, profilassi antibiotica, dispositivo energia, invio pezzo anatomopatologico se pertinente).
+   VIETATO in questo file: giorni di degenza, decorso postoperatorio, evoluzione clinica nei giorni successivi, dolore VAS a 24h, infezione sito chirurgico nel post-ricovero, destinazione alla dimissione, "il paziente è stato dimesso", durata del ricovero.
+
+3) pdf_dimissione — referto/lettera di dimissione: qui SÌ decorso, parametri post-op, giorni di ricovero, complicanze tardive rilevanti, destinazione.
+
+DISTRIBUZIONE ASIMMETRICA (maschera — rispetta rigorosamente):
+${placementLines}
+
+VARIETÀ E "RUMORE" (simulazione cartella clinica reale):
+- Differenzia nettamente stile e struttura tra i tre file (es. note frammentate, richiami amministrativi, ordini duplicati, frasi spezzate). Non usare tre modelli copia-incolla.
+- Nei file con poche o zero variabili assegnate, riempi con contenuto clinicamente plausibile ma irrilevante per l'estrazione (note infermieristiche, riferimenti a reparti, testo disomogeneo), senza replicare i valori esatti delle variabili che appartengono ad altri documenti secondo la maschera.
+- I valori da estrarre, quando presenti in un file, devono restare leggibili e coerenti con il JSON; il rumore non deve alterare quei valori.
+
+Output: un solo oggetto JSON con esattamente le chiavi stringa txt_ingresso, jpg_operatorio, pdf_dimissione.
+
+DATI (JSON):
+${JSON.stringify({ patient, distributionMask: variableToDoc, variablesByDocument: byDoc })}`
 }
 
 function stripMarkdownCodeFence(text) {
@@ -461,37 +756,41 @@ function normalizeDocPayloadShape(parsed) {
   return null
 }
 
-async function requestOpenRouterCompletion(apiKey, promptPayload, model) {
+async function requestOpenRouterCompletion(promptPayload, model) {
+  const patient = promptPayload?.patient
+  const variableToDoc = promptPayload?.distributionMask
+  if (!patient || !variableToDoc) {
+    throw new Error('OpenRouter: promptPayload mancante (patient o distributionMask).')
+  }
+  const userContent = buildOpenRouterUserContent(patient, variableToDoc)
+
   const referer =
     typeof window !== 'undefined' && window.location?.origin
       ? window.location.origin
       : 'http://localhost'
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': referer,
-      'X-Title': 'Garante Web App',
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Sei un medical report generator. Devi rispondere esclusivamente con un JSON valido con tre sole chiavi stringa: txt_ingresso, jpg_operatorio, pdf_dimissione. Non usare markdown, non usare chiavi annidate.',
-        },
-        {
-          role: 'user',
-          content: `Genera 3 referti testuali coerenti con i dati clinici. Ritorna solo JSON con chiavi esatte txt_ingresso, jpg_operatorio, pdf_dimissione.
-Regola: concentra ogni variabile nel documento indicato dalla distributionMask. Negli altri documenti usa contenuto contestuale ma non duplicare variabili strutturate.
-Input: ${JSON.stringify(promptPayload)}`,
-        },
-      ],
-    }),
+
+  const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY ?? ''
+  const openRouterBody = {
+    model,
+    temperature: 0.48,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Sei un generatore di referti chirurgici in italiano. Rispondi SOLO con un JSON valido contenente esattamente tre stringhe nelle chiavi: txt_ingresso, jpg_operatorio, pdf_dimissione. Nessun markdown, nessun testo fuori dal JSON, nessuna chiave aggiuntiva.',
+      },
+      {
+        role: 'user',
+        content: userContent,
+      },
+    ],
+  }
+
+  const response = await fetchOpenRouterChatCompletion({
+    apiKey,
+    referer,
+    openRouterBody,
   })
 
   if (response.status === 429) {
@@ -565,7 +864,7 @@ export default function GeneratorEngine() {
   const [groundTruthRows, setGroundTruthRows] = useState([])
   const [corruptionCount, setCorruptionCount] = useState(0)
   const [resumedFromCheckpoint, setResumedFromCheckpoint] = useState(false)
-  const [isExporting, setIsExporting] = useState(false)
+  const [isExporting] = useState(false)
   const [exportMessage, setExportMessage] = useState('')
   const [activeRunMetadata, setActiveRunMetadata] = useState(null)
   const [isPaused, setIsPaused] = useState(false)
@@ -576,7 +875,7 @@ export default function GeneratorEngine() {
   const [activeApiModel, setActiveApiModel] = useState(MODEL_OPTIONS[0].value)
   const [isTestingApiKey, setIsTestingApiKey] = useState(false)
   const [apiPreflightMessage, setApiPreflightMessage] = useState('')
-  const [directoryHandle, setDirectoryHandle] = useState(null)
+  const [, setDirectoryHandle] = useState(null)
   const [outputDirectoryName, setOutputDirectoryName] = useState('')
   const pauseRequestedRef = useRef(false)
   const stopRequestedRef = useRef(false)
@@ -601,11 +900,13 @@ export default function GeneratorEngine() {
   }
 
   const handleTestApiKey = async () => {
-    const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY
+    const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY ?? ''
     setErrorMessage('')
 
-    if (!apiKey) {
-      setApiPreflightMessage('API key non configurata in .env.local.')
+    if (!shouldUseOpenRouterProxy() && !apiKey) {
+      setApiPreflightMessage(
+        'API key non configurata. In locale aggiungi VITE_OPENROUTER_API_KEY in .env.local, oppure usa il proxy Firebase (vedi README).',
+      )
       return
     }
 
@@ -618,24 +919,21 @@ export default function GeneratorEngine() {
           : 'http://localhost'
       let lastFailure = ''
 
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': referer,
-          'X-Title': 'Garante Web App',
-        },
-        body: JSON.stringify({
-          model: selectedApiModel,
-          max_tokens: 8,
-          temperature: 0,
-          messages: [
-            { role: 'system', content: 'Return only JSON.' },
-            { role: 'user', content: '{"healthcheck":"ok"}' },
-          ],
-          response_format: { type: 'json_object' },
-        }),
+      const openRouterBody = {
+        model: selectedApiModel,
+        max_tokens: 8,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: 'Return only JSON.' },
+          { role: 'user', content: '{"healthcheck":"ok"}' },
+        ],
+        response_format: { type: 'json_object' },
+      }
+
+      const response = await fetchOpenRouterChatCompletion({
+        apiKey,
+        referer,
+        openRouterBody,
       })
 
       if (response.ok) {
@@ -683,10 +981,10 @@ export default function GeneratorEngine() {
       return
     }
 
-    const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY
-    if (!apiKey) {
+    const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY ?? ''
+    if (!shouldUseOpenRouterProxy() && !apiKey) {
       setErrorMessage(
-        'API key OpenRouter non trovata. Configura VITE_OPENROUTER_API_KEY nel file .env.local.',
+        'OpenRouter non configurato: imposta VITE_OPENROUTER_API_KEY in .env.local (sviluppo) oppure usa il deploy Firebase con proxy (chiave solo lato server).',
       )
       return
     }
@@ -822,9 +1120,44 @@ export default function GeneratorEngine() {
 
     upsertRunMetadata(runMetadata)
 
+    const firstPatientPrefix = `Paziente_${String(1).padStart(3, '0')}`
+    const diskHasFirstPatient = await patientOutputsCompleteOnDisk(
+      selectedDirectoryHandle,
+      firstPatientPrefix,
+    )
+
+    if (startAt >= TOTAL_PATIENTS && !diskHasFirstPatient) {
+      startAt = 0
+      workingGeneratedRows = []
+      workingCorruptionCount = 0
+      setGeneratedRows([])
+      setProgressIndex(0)
+      setCorruptionCount(0)
+      persistSession(seed, {
+        seed,
+        runId,
+        nextIndex: 0,
+        generatedRows: [],
+        groundTruthRows: precomputedGroundTruth,
+        corruptionCount: 0,
+        updatedAt: new Date().toISOString(),
+      })
+      runMetadata = {
+        ...runMetadata,
+        nextIndex: 0,
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+      }
+      setActiveRunMetadata(runMetadata)
+      upsertRunMetadata(runMetadata)
+      setStatusMessage(
+        'Sessione indicava gia 330 pazienti ma la cartella e vuota: ripartenza da zero.',
+      )
+    }
+
     if (startAt >= TOTAL_PATIENTS) {
       setIsRunning(false)
-      setStatusMessage('Sessione già completata per questo seed. Output pronto per export.')
+      setStatusMessage('Sessione gia completata per questo seed e file presenti in cartella.')
       return
     }
 
@@ -852,26 +1185,21 @@ export default function GeneratorEngine() {
         const variableToDoc = assignVariableMask(seed, i)
         const corruptedDocs = computeCorruption(seed, i)
         const promptPayload = buildPromptInput(patient, variableToDoc)
-        const expectedPdfName = `${patientPrefix}_Dimissione.pdf`
 
-        const existingGeneratedRow = workingGeneratedRows[i]
-        const existingGroundTruthRow = workingGroundTruthRows[i]
-        const existingOnDisk = await fileExistsInDirectory(
+        const outputsAlreadyOnDisk = await patientOutputsCompleteOnDisk(
           selectedDirectoryHandle,
-          expectedPdfName,
+          patientPrefix,
         )
-        const hasReusableRow =
-          existingOnDisk ||
-          existingGeneratedRow?.patientId === patient.patientId &&
-          existingGroundTruthRow?.patientId === patient.patientId
 
-        if (hasReusableRow) {
+        if (outputsAlreadyOnDisk) {
           setStatusMessage(
             `Skip resume: file gia presenti per paziente ${i + 1}/${TOTAL_PATIENTS}.`,
           )
           reusedThisRun += 1
           setReusedCount(reusedThisRun)
         } else {
+          const groundTruth = buildGroundTruth(patient, variableToDoc, corruptedDocs)
+
           let docPayload
           let attempts = 0
           let waitMs = RATE_LIMIT_SLEEP_MS
@@ -879,7 +1207,7 @@ export default function GeneratorEngine() {
           while (attempts < RATE_LIMIT_MAX_RETRIES) {
             attempts += 1
             try {
-              docPayload = await requestOpenRouterCompletion(apiKey, promptPayload, selectedApiModel)
+              docPayload = await requestOpenRouterCompletion(promptPayload, selectedApiModel)
               break
             } catch (error) {
               if (error?.code === 429) {
@@ -912,7 +1240,7 @@ export default function GeneratorEngine() {
             )
           }
 
-          const finalDocs = { ...docPayload }
+          let finalDocs = scrubMisplacedClinicalValues({ ...docPayload }, patient, variableToDoc)
           let patientCorruptedFiles = 0
           for (const key of DOC_KEYS) {
             if (corruptedDocs[key]) {
@@ -921,7 +1249,7 @@ export default function GeneratorEngine() {
             }
           }
 
-          const groundTruth = buildGroundTruth(patient, variableToDoc, corruptedDocs)
+          warnIfCorruptionPayloadMismatch(patient.patientId, corruptedDocs, finalDocs)
 
           await writeBlobToDirectory(
             selectedDirectoryHandle,
@@ -972,7 +1300,7 @@ export default function GeneratorEngine() {
         setProgressIndex(nextIndex)
         await writeGroundTruthCsvLive(
           selectedDirectoryHandle,
-          precomputedGroundTruth.slice(0, nextIndex),
+          groundTruthSnapshot.slice(0, nextIndex),
         )
 
         runMetadata = {

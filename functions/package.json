@@ -1,0 +1,16 @@
+{
+  "name": "garante-functions",
+  "description": "Proxy OpenRouter per Garante Web App",
+  "type": "commonjs",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions"
+  },
+  "dependencies": {
+    "firebase-functions": "^6.3.0"
+  },
+  "private": true
+}
